@@ -1,157 +1,357 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
-<meta charset="utf-8">
+<meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Skybox HDR fijo</title>
+<title>Skybox fijo HDR</title>
 <style>
 html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#111}
-#panel{position:fixed;top:14px;left:14px;z-index:10;width:270px;padding:15px;
-background:rgba(15,15,15,.9);color:#eee;font:12px Arial;border-radius:12px;
-box-shadow:0 8px 30px rgba(0,0,0,.45);backdrop-filter:blur(8px)}
-.title{font-size:17px;font-weight:bold;margin-bottom:14px}
-label{display:block;margin:10px 0 5px} label span{float:right;color:#aaa}
-input[type=range],select,button{width:100%}
-select,button{padding:8px;margin-top:5px;background:#292929;color:#eee;border:0;border-radius:7px}
-button{margin-top:14px;background:#3b82f6;font-weight:bold;cursor:pointer}
-.help{margin-top:11px;color:#999}
+#info{position:fixed;left:14px;bottom:14px;padding:8px 11px;
+background:rgba(0,0,0,.55);color:#fff;font:12px Arial;border-radius:8px}
 </style>
 </head>
 <body>
-<div id="panel">
-<div class="title">🌌 Ajustes HDR</div>
-<label>Exposición <span id="ev">1.00</span></label>
-<input id="exposure" type="range" min="0" max="4" step=".01" value="1">
-<label>Contraste <span id="cv">1.00</span></label>
-<input id="contrast" type="range" min=".5" max="2" step=".01" value="1">
-<label>Saturación <span id="sv">1.00</span></label>
-<input id="saturation" type="range" min="0" max="2" step=".01" value="1">
-<label>Gamma <span id="gv">1.00</span></label>
-<input id="gamma" type="range" min=".5" max="2" step=".01" value="1">
-<label>Tonemapping</label>
-<select id="tone"><option value="aces">ACES Filmic</option><option value="reinhard">Reinhard</option><option value="cineon">Cineon</option><option value="none">Sin tonemapping</option></select>
-<label>Rotación <span id="rv">0°</span></label>
-<input id="rotation" type="range" min="-180" max="180" step="1" value="0">
-<button id="reset">Restablecer</button>
-<div class="help">Arrastra para mirar · rueda para zoom</div>
-</div>
+<div id="info">Arrastra para mirar · rueda para zoom</div>
 
 <script type="importmap">
-{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"}}
+{
+  "imports":{
+    "three":"https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+    "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+  }
+}
 </script>
+
 <script type="module">
 import * as THREE from "three";
-import {RGBELoader} from "three/addons/loaders/RGBELoader.js";
-import {EffectComposer} from "three/addons/postprocessing/EffectComposer.js";
-import {RenderPass} from "three/addons/postprocessing/RenderPass.js";
-import {ShaderPass} from "three/addons/postprocessing/ShaderPass.js";
+import { RGBELoader } from "three/addons/loaders/RGBELoader.js";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 
-const scene=new THREE.Scene();
-const camera=new THREE.PerspectiveCamera(75,innerWidth/innerHeight,.01,1000);
-const renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:"high-performance"});
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(
+    75, innerWidth / innerHeight, 0.01, 1000
+);
+
+const renderer = new THREE.WebGLRenderer({
+    antialias:true,
+    powerPreference:"high-performance"
+});
+
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));
 renderer.setSize(innerWidth,innerHeight);
-renderer.outputColorSpace=THREE.SRGBColorSpace;
-renderer.toneMapping=THREE.NoToneMapping;
+
+// Sin tonemapping de Three.js.
+// La conversión final la hacemos en nuestro shader.
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.NoToneMapping;
+renderer.toneMappingExposure = 0;
+
 document.body.appendChild(renderer.domElement);
 
-const shader={
-uniforms:{tDiffuse:{value:null},exposure:{value:1},contrast:{value:1},saturation:{value:1},gamma:{value:1}},
-vertexShader:`varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
-fragmentShader:`
-uniform sampler2D tDiffuse; uniform float exposure,contrast,saturation,gamma; varying vec2 vUv;
-vec3 aces(vec3 x){float a=2.51,b=.03,c=2.43,d=.59,e=.14;return clamp((x*(a*x+b))/(x*(c*x+d)+e),0.,1.);}
-vec3 reinhard(vec3 x){return x/(1.+x);}
-vec3 cineon(vec3 x){x=max(vec3(0.),x-.004);return clamp((x*(6.2*x+.5))/(x*(6.2*x+1.7)+.06),0.,1.);}
-void main(){
-vec3 c=texture2D(tDiffuse,vUv).rgb;
-c*=pow(2.,exposure);
-float l=dot(c,vec3(.2126,.7152,.0722));
-c=mix(vec3(l),c,saturation);
-c=(c-.5)*contrast+.5;c=max(c,vec3(0.));
-#ifdef ACES
-c=aces(c);
-#elif defined(REINHARD)
-c=reinhard(c);
-#elif defined(CINEON)
-c=cineon(c);
-#endif
-c=pow(max(c,vec3(0.)),vec3(1./gamma));
-gl_FragColor=vec4(c,1.);
-}
-`
-};
+// --------------------------------------------------
+// POSTPROCESADO: EXPOSICIÓN 0 + GAMMA 2
+// --------------------------------------------------
 
-const composer=new EffectComposer(renderer);
-composer.addPass(new RenderPass(scene,camera));
-const colorPass=new ShaderPass(shader);
+const composer = new EffectComposer(renderer);
+
+composer.addPass(
+    new RenderPass(scene, camera)
+);
+
+const colorPass = new ShaderPass({
+    uniforms:{
+        tDiffuse:{value:null},
+        exposure:{value:0.0},
+        gamma:{value:2.0}
+    },
+
+    vertexShader:`
+        varying vec2 vUv;
+
+        void main(){
+            vUv = uv;
+
+            gl_Position =
+                projectionMatrix *
+                modelViewMatrix *
+                vec4(position,1.0);
+        }
+    `,
+
+    fragmentShader:`
+        uniform sampler2D tDiffuse;
+        uniform float exposure;
+        uniform float gamma;
+
+        varying vec2 vUv;
+
+        void main(){
+
+            vec3 color =
+                texture2D(tDiffuse,vUv).rgb;
+
+            // Exposición.
+            color *= pow(2.0, exposure);
+
+            // Gamma 2.0.
+            color =
+                pow(
+                    max(color,vec3(0.0)),
+                    vec3(1.0/gamma)
+                );
+
+            gl_FragColor =
+                vec4(color,1.0);
+        }
+    `
+});
+
 composer.addPass(colorPass);
 
-const loader=new RGBELoader();
-let skyboxMesh=null;
-const files=["panoramahdr_3.hdr","panoramahdr_1.hdr","panoramahdr_4.hdr","panoramahdr_5.hdr","panoramahdr_0.hdr","panoramahdr_2.hdr"];
+// --------------------------------------------------
+// TUS 6 IMÁGENES
+// --------------------------------------------------
+
+const files = [
+    "panoramahdr_3.hdr", // PX +X
+    "panoramahdr_1.hdr", // NX -X
+    "panoramahdr_4.hdr", // PY +Y
+    "panoramahdr_5.hdr", // NY -Y
+    "panoramahdr_0.hdr", // PZ +Z
+    "panoramahdr_2.hdr"  // NZ -Z
+];
+
+const loader = new RGBELoader();
 
 function loadHDR(file){
- return new Promise((resolve,reject)=>loader.load(file,t=>{
-   t.colorSpace=THREE.LinearSRGBColorSpace;
-   t.wrapS=THREE.RepeatWrapping;t.repeat.x=-1;t.offset.x=1;t.needsUpdate=true;
-   resolve(t);
- },undefined,reject));
-}
-async function init(){
- try{
-  const textures=await Promise.all(files.map(loadHDR));
-  const geometry=new THREE.BoxGeometry(100,100,100);
-  const materials=textures.map(t=>new THREE.MeshBasicMaterial({map:t,side:THREE.BackSide,toneMapped:false}));
-  skyboxMesh=new THREE.Mesh(geometry,materials);
-  scene.add(skyboxMesh);
-  update();
- }catch(e){console.error(e);document.querySelector(".title").textContent="❌ Error cargando HDR";}
+
+    return new Promise((resolve,reject)=>{
+
+        loader.load(
+            file,
+
+            texture=>{
+
+                texture.colorSpace =
+                    THREE.LinearSRGBColorSpace;
+
+                // Corrección horizontal X.
+                texture.wrapS =
+                    THREE.RepeatWrapping;
+
+                texture.repeat.x = -1;
+                texture.offset.x = 1;
+
+                texture.needsUpdate = true;
+
+                resolve(texture);
+            },
+
+            undefined,
+
+            reject
+        );
+
+    });
 }
 
-const ui={
- exposure:document.getElementById("exposure"),
- contrast:document.getElementById("contrast"),
- saturation:document.getElementById("saturation"),
- gamma:document.getElementById("gamma"),
- tone:document.getElementById("tone"),
- rotation:document.getElementById("rotation")
-};
-function update(){
- colorPass.uniforms.exposure.value=+ui.exposure.value;
- colorPass.uniforms.contrast.value=+ui.contrast.value;
- colorPass.uniforms.saturation.value=+ui.saturation.value;
- colorPass.uniforms.gamma.value=+ui.gamma.value;
- document.getElementById("ev").textContent=(+ui.exposure.value).toFixed(2);
- document.getElementById("cv").textContent=(+ui.contrast.value).toFixed(2);
- document.getElementById("sv").textContent=(+ui.saturation.value).toFixed(2);
- document.getElementById("gv").textContent=(+ui.gamma.value).toFixed(2);
- document.getElementById("rv").textContent=ui.rotation.value+"°";
- if(skyboxMesh)skyboxMesh.rotation.y=THREE.MathUtils.degToRad(+ui.rotation.value);
- colorPass.material.defines={};
- if(ui.tone.value==="aces")colorPass.material.defines.ACES="";
- if(ui.tone.value==="reinhard")colorPass.material.defines.REINHARD="";
- if(ui.tone.value==="cineon")colorPass.material.defines.CINEON="";
- colorPass.material.needsUpdate=true;
-}
-Object.values(ui).forEach(x=>{x.addEventListener("input",update);x.addEventListener("change",update);});
-document.getElementById("reset").onclick=()=>{
- ui.exposure.value=1;ui.contrast.value=1;ui.saturation.value=1;ui.gamma.value=1;ui.tone.value="aces";ui.rotation.value=0;update();
-};
+// --------------------------------------------------
+// CREAR SKYBOX
+// --------------------------------------------------
 
-let yaw=0,pitch=0,dragging=false,lastX=0,lastY=0;
-renderer.domElement.addEventListener("pointerdown",e=>{dragging=true;lastX=e.clientX;lastY=e.clientY;renderer.domElement.setPointerCapture(e.pointerId);});
-renderer.domElement.addEventListener("pointermove",e=>{
- if(!dragging)return;
- yaw-=(e.clientX-lastX)*.005;pitch-=(e.clientY-lastY)*.005;lastX=e.clientX;lastY=e.clientY;
- pitch=THREE.MathUtils.clamp(pitch,-Math.PI/2+.01,Math.PI/2-.01);
-});
-renderer.domElement.addEventListener("pointerup",()=>dragging=false);
-renderer.domElement.addEventListener("wheel",e=>{e.preventDefault();camera.fov=THREE.MathUtils.clamp(camera.fov+e.deltaY*.04,30,110);camera.updateProjectionMatrix();},{passive:false});
-addEventListener("resize",()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);composer.setSize(innerWidth,innerHeight);});
-function animate(){requestAnimationFrame(animate);camera.rotation.order="YXZ";camera.rotation.y=yaw;camera.rotation.x=pitch;composer.render();}
-init();animate();
+async function createSkybox(){
+
+    try{
+
+        const textures =
+            await Promise.all(
+                files.map(loadHDR)
+            );
+
+        /*
+         * BoxGeometry:
+         *
+         * 0 PX
+         * 1 NX
+         * 2 PY
+         * 3 NY
+         * 4 PZ
+         * 5 NZ
+         */
+
+        const geometry =
+            new THREE.BoxGeometry(
+                100,100,100
+            );
+
+        const materials =
+            textures.map(texture =>
+                new THREE.MeshBasicMaterial({
+                    map:texture,
+                    side:THREE.BackSide,
+
+                    // Muy importante:
+                    // el shader se encarga del color final.
+                    toneMapped:false
+                })
+            );
+
+        const skybox =
+            new THREE.Mesh(
+                geometry,
+                materials
+            );
+
+        scene.add(skybox);
+
+    }catch(error){
+
+        console.error(error);
+
+        document.getElementById("info").textContent =
+            "Error cargando el skybox. Mira la consola (F12).";
+    }
+}
+
+createSkybox();
+
+// --------------------------------------------------
+// CÁMARA
+// --------------------------------------------------
+
+let yaw=0;
+let pitch=0;
+let dragging=false;
+
+let lastX=0;
+let lastY=0;
+
+renderer.domElement.addEventListener(
+    "pointerdown",
+    e=>{
+
+        dragging=true;
+
+        lastX=e.clientX;
+        lastY=e.clientY;
+
+        renderer.domElement.setPointerCapture(
+            e.pointerId
+        );
+    }
+);
+
+renderer.domElement.addEventListener(
+    "pointermove",
+    e=>{
+
+        if(!dragging)return;
+
+        const dx =
+            e.clientX-lastX;
+
+        const dy =
+            e.clientY-lastY;
+
+        lastX=e.clientX;
+        lastY=e.clientY;
+
+        yaw -= dx*0.005;
+        pitch -= dy*0.005;
+
+        const limit =
+            Math.PI/2-0.01;
+
+        pitch =
+            THREE.MathUtils.clamp(
+                pitch,
+                -limit,
+                limit
+            );
+    }
+);
+
+renderer.domElement.addEventListener(
+    "pointerup",
+    ()=>{
+        dragging=false;
+    }
+);
+
+renderer.domElement.addEventListener(
+    "wheel",
+    e=>{
+
+        e.preventDefault();
+
+        camera.fov +=
+            e.deltaY*0.04;
+
+        camera.fov =
+            THREE.MathUtils.clamp(
+                camera.fov,
+                30,
+                110
+            );
+
+        camera.updateProjectionMatrix();
+
+    },
+    {passive:false}
+);
+
+// --------------------------------------------------
+// RESIZE
+// --------------------------------------------------
+
+addEventListener(
+    "resize",
+    ()=>{
+
+        camera.aspect =
+            innerWidth/innerHeight;
+
+        camera.updateProjectionMatrix();
+
+        renderer.setSize(
+            innerWidth,
+            innerHeight
+        );
+
+        composer.setSize(
+            innerWidth,
+            innerHeight
+        );
+    }
+);
+
+// --------------------------------------------------
+// RENDER
+// --------------------------------------------------
+
+function animate(){
+
+    requestAnimationFrame(
+        animate
+    );
+
+    camera.rotation.order =
+        "YXZ";
+
+    camera.rotation.y =
+        yaw;
+
+    camera.rotation.x =
+        pitch;
+
+    composer.render();
+}
+
+animate();
+
 </script>
 </body>
-</html>
 </html>
